@@ -1,0 +1,7 @@
+/wandb/
+/data/
+/__*__/
+/models/
+
+
+.env
