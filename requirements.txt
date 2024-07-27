@@ -1,0 +1,6 @@
+datasets
+accelerate
+transformers
+trl
+python-dotenv
+wandb
