@@ -15,10 +15,6 @@ print('[ INFO ] TORCH CUDA COUNT: ', torch.cuda.device_count())
 load_dotenv()
 
 
-wandb.login(key=os.environ['WANDB_API_KEY'], relogin=True)
-wandb.init(project=os.environ['WANDB_PROJECT'])
-
-
 model_name = "Qwen/Qwen2-0.5B-Instruct"
 teacher_name = "Qwen/Qwen2-7B-Instruct"
 
@@ -58,10 +54,10 @@ load_in_4bit = True
 #teacher_model = PeftModelForCausalLM.from_pretrained(teacher_model, 'juniorrios/qwen-7b-adapter-qa-corejur', token=os.environ['HF_KEY'])
 #teacher_model = FastLlamaModel.patch_peft_model(teacher_model)
 
-teacher_model.eval()
+#teacher_model.eval()
 
-print('[ INFO ] Teacher model')
-print(teacher_model)
+#print('[ INFO ] Teacher model')
+#print(teacher_model)
 
 
 
@@ -86,11 +82,9 @@ lora_config = LoraConfig(
 )
 
 model = PeftModelForCausalLM(model, lora_config)
+model.print_trainable_parameters()
 #model = FastLlamaModel.patch_peft_model(model)
 
-
-print('[ INFO ] Student model')
-print(model)
 
 
 
@@ -150,11 +144,15 @@ distil_args = DistilConfig()
 
 sft_config = SFTConfig(
             output_dir=save_path,
+            save_steps=50,
             per_device_train_batch_size=1,
             per_gpu_eval_batch_size=1, 
             dataset_text_field='text', 
             max_seq_length=max_seq_length, 
-            gradient_accumulation_steps=8
+            gradient_accumulation_steps=8,
+            optim = "paged_adamw_8bit",
+            weight_decay = 0.01,
+            lr_scheduler_type = "linear",
     )
 
 
