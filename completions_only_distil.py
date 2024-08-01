@@ -8,15 +8,19 @@ from custom_trainer import SFTDistilTrainer
 import os
 import wandb
 from dotenv import load_dotenv
-#from unsloth import FastLanguageModel, FastLlamaModel
+from unsloth import FastLanguageModel, FastLlamaModel
 from peft import LoraConfig, PeftModelForCausalLM
+
+
+
+
 print('[ INFO ] TORCH CUDA COUNT: ', torch.cuda.device_count())
 
 load_dotenv()
 
 
 model_name = "Qwen/Qwen2-0.5B-Instruct"
-teacher_name = "Qwen/Qwen2-7B-Instruct"
+teacher_name = "Qwen/Qwen2-0.5B-Instruct"
 
 
 max_seq_length = 8*1024 
@@ -26,33 +30,33 @@ load_in_4bit = True
 
 # Load models
 
-model = AutoModelForCausalLM.from_pretrained(model_name,
-                                             attn_implementation="flash_attention_2",
-                                             torch_dtype=torch.float16,
-                                             device_map='auto'
-)
+# model = AutoModelForCausalLM.from_pretrained(model_name,
+#                                              attn_implementation="flash_attention_2",
+#                                              torch_dtype=torch.float16,
+#                                              device_map='auto'
+# )
 
 
-teacher_model = AutoModelForCausalLM.from_pretrained(teacher_name,
-                                             attn_implementation="flash_attention_2",
-                                             torch_dtype=torch.float16,
-                                             device_map='auto',
-                                             load_in_4bit = load_in_4bit
-)
+# teacher_model = AutoModelForCausalLM.from_pretrained(teacher_name,
+#                                              attn_implementation="flash_attention_2",
+#                                              torch_dtype=torch.float16,
+#                                              device_map='auto',
+#                                              load_in_4bit = load_in_4bit
+# )
 
 load_in_4bit = True
 
 # Load directly with Unsloth to download 4bit models 
-# teacher_model, _ = FastLanguageModel.from_pretrained(
-#     teacher_name, 
-#     max_seq_length = max_seq_length,
-#     dtype = torch.bfloat16,
-#     load_in_4bit = load_in_4bit,    
-# )
+teacher_model, _ = FastLanguageModel.from_pretrained(
+    teacher_name, 
+    max_seq_length = max_seq_length,
+    dtype = torch.bfloat16,
+    load_in_4bit = load_in_4bit,    
+)
 
 # Already trained model
-#teacher_model = PeftModelForCausalLM.from_pretrained(teacher_model, 'juniorrios/qwen-7b-adapter-qa-corejur', token=os.environ['HF_KEY'])
-#teacher_model = FastLlamaModel.patch_peft_model(teacher_model)
+teacher_model = PeftModelForCausalLM.from_pretrained(teacher_model, 'juniorrios/qwen-7b-adapter-qa-corejur', token=os.environ['HF_KEY'])
+teacher_model = FastLlamaModel.patch_peft_model(teacher_model)
 
 #teacher_model.eval()
 
@@ -61,17 +65,16 @@ load_in_4bit = True
 
 
 
-# model, tokenizer = FastLanguageModel.from_pretrained(
-#     model_name = model_name,
-#     max_seq_length = max_seq_length,
-#     dtype = torch.bfloat16,
-#     load_in_4bit = load_in_4bit,
-# )
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = model_name,
+    max_seq_length = max_seq_length,
+    dtype = torch.bfloat16,
+    load_in_4bit = load_in_4bit,
+)
 
 lora_config = LoraConfig(
     r = 8, # ESTAVA EM 16 Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                      "gate_proj", "up_proj", "down_proj",],
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"],
     lora_alpha = 16,  # ESTAVA EM 16,
     lora_dropout = 0, # Supports any, but = 0 is optimized
     bias = "none",    # Supports any, but = "none" is optimized
@@ -82,14 +85,21 @@ lora_config = LoraConfig(
 )
 
 model = PeftModelForCausalLM(model, lora_config)
-model.print_trainable_parameters()
-#model = FastLlamaModel.patch_peft_model(model)
+model = FastLlamaModel.patch_peft_model(model)
+#model.print_trainable_parameters()
+
+
+# from unsloth import FastLlamaModel
+# model = FastLlamaModel.patch_peft_model(model)
+# teacher_model = FastLlamaModel.patch_peft_model(model)
 
 
 
 
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+
 
 # def formatting_prompts_func(example):
 #     output_texts = []
@@ -126,8 +136,9 @@ EOS_TOKEN = tokenizer.eos_token # Must add EOS_TOKEN
 df['text'] = df['text'] + EOS_TOKEN
 df['len'] = df['text'].apply(lambda x: len(tokenizer(x).input_ids))
 df = df[df['len'] <= max_seq_length]
+df = df.drop_duplicates()
 dataset = Dataset.from_pandas(df)
-save_path = f"models/qwen0.5b-QA_r8_distil_srkl-ratio0.1"
+save_path = f"models/qwen0.5b-QA_r8_distil_srkl-ratio1"
 response_template = ' ###Respostas:'
 
 
@@ -137,7 +148,7 @@ response_template = ' ###Respostas:'
 class DistilConfig:
     skew_alpha = 0.1
     type = 'srkl'
-    kd_ratio = 0.8
+    kd_ratio = 1
 
 
 distil_args = DistilConfig()
@@ -151,8 +162,16 @@ sft_config = SFTConfig(
             max_seq_length=max_seq_length, 
             gradient_accumulation_steps=8,
             optim = "paged_adamw_8bit",
-            weight_decay = 0.01,
             lr_scheduler_type = "linear",
+            warmup_ratio= 0.07,
+            num_train_epochs = 2,
+            learning_rate = 2e-3,
+            bf16 = True,
+            logging_steps = 1,
+            weight_decay = 0.01,
+            seed = 3407,
+            report_to="wandb",
+            #gradient_checkpointing=True
     )
 
 

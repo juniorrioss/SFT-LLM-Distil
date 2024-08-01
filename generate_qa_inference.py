@@ -1,22 +1,32 @@
 from unsloth import FastLanguageModel
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModelForCausalLM
+import dotenv
+import os
+dotenv.load_dotenv()
 
 
 model_path = 'models/qwen0.5b-QA_r8/checkpoint-256'
+model_name = 'Qwen/Qwen2-0.5B-Instruct'
+model_path = 'juniorrios/qwen0.5-corejur-qa-fkl-ratio0.5'
 max_seq_length = 8*1024
 
 
-tokenizer = AutoTokenizer.from_pretrained(model_path)
 
 model  = AutoModelForCausalLM.from_pretrained(
-    model_path,
+    model_name,
     #max_seq_length = max_seq_length,
     #dtype = torch.bfloat16,
     attn_implementation="flash_attention_2",
     load_in_4bit = True,
+    token=os.environ['HF_KEY']
 )
 
+model = PeftModelForCausalLM.from_pretrained(model, model_path, token=os.environ['HF_KEY'])
+
+
+tokenizer = AutoTokenizer.from_pretrained(model_name, token=os.environ['HF_KEY'])
 
 
 print(model)
@@ -35,7 +45,7 @@ df = pd.read_json(test_file)
 
 
 
-model = torch.compile(model)
+model = torch.compile(model, mode='reduce-overhead')
 
 
 def run_gen(prompt):
@@ -45,7 +55,7 @@ def run_gen(prompt):
       return {'output': ['OUTOFLIMIT']}
     
     with torch.inference_mode():
-      output = model.generate(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], max_new_tokens=1000, do_sample=False, pad_token_id=tokenizer.eos_token_id)
+      output = model.generate(input_ids=inputs['input_ids'], attention_mask=inputs['attention_mask'], max_new_tokens=250, do_sample=False, pad_token_id=tokenizer.eos_token_id)
     output = tokenizer.batch_decode(output, skip_special_tokens=True)
     try:
       output = output[0].split('###Respostas:')[1]
@@ -62,7 +72,7 @@ dataset = Dataset.from_pandas(df)
 dataset = dataset.map(run_gen, batched=False)
 
 #save_path = f"outputs/output_datasetv{args.version}_{test_file}_{model_choosed}.json"
-save_path = f"outputs/qwen7b-QA_r8.json"
+save_path = f"outputs/qwen0.5b-QA_r8_distiltest.json"
 dataset.to_pandas().to_json(save_path)
 #dataset.save_to_disk('.')
 #df.to_json(save_path)

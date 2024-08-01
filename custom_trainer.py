@@ -6,6 +6,15 @@ from torch import nn
 from torch.utils.data import DataLoader
 import wandb
 import os
+import gc
+
+def flush():
+  gc.collect()
+  torch.cuda.empty_cache()
+  torch.cuda.reset_peak_memory_stats()
+
+
+
 
 def move_to_device(model, data, int_device=0):
     if isinstance(model, PeftModelForCausalLM):
@@ -30,44 +39,37 @@ class SFTDistilTrainer(SFTTrainer):
     self.distil_args = distil_args
     
   def compute_loss(self, model, inputs, return_outputs=False):
+
         cuda_device = 1
         cuda_device_student = 0
     
         model, inputs = move_to_device(model, inputs, int_device=cuda_device_student)
 
-        labels = inputs.pop("labels")
+        #labels = inputs.pop("labels")
 
-        
         outputs = model(**inputs)
         
         logits = outputs.logits
         
-        #print('CALCUALNDO A LOSS CONVENCIONAL')
         # Conventional Language modeling Loss
         #lm_loss = self.loss_func(logits.float().view(-1, logits.shape[-1]), labels.view(-1))     
-        lm_loss = 0
-        #print(lm_loss)   
-        
-        # Return input['labels'] to calculate distil loss
-        inputs['label'] = labels
-        
-        #print('CALCUALNDO A LOSS DE DISTIL')
+        lm_loss = outputs.loss
+        inputs['label'] = inputs['labels']
         
         distil_loss = self.get_distil_loss(self.distil_args, inputs, logits)
-        #print('Distil loss     ', distil_loss)   
+        
         loss = (1 - self.distil_args.kd_ratio) * lm_loss + self.distil_args.kd_ratio * distil_loss
         
                         
-        wandb.log({'train/loss_lm': lm_loss, 'train/loss': loss, 'train/loss_distil': distil_loss})
         
-        return (loss, outputs) if return_outputs else loss  
+        return loss, distil_loss, lm_loss 
     
   def get_distil_loss(self, args, inputs, logits):
     
-    cuda_device = 0
+    cuda_device_teacher = 1
     cuda_device_student = 0
     
-    #teacher_model, inputs = move_to_device(teacher_model, inputs, int_device=0)
+    teacher_model, inputs = move_to_device(teacher_model, inputs, int_device=cuda_device_teacher)
          
     labels = inputs.pop('label') 
     
@@ -80,14 +82,16 @@ class SFTDistilTrainer(SFTTrainer):
     del inputs['input_ids']
     del inputs['attention_mask']
     
-    torch.cuda.empty_cache()
+    flush()
     labels = labels.cpu()
     inputs['label'] = labels
     
     
-    teacher_logits = teacher_logits.cpu()  
+    teacher_logits = teacher_logits.cpu() 
+    teacher_logits = teacher_logits[:, :, :len(self.tokenizer)] 
     logits = logits.cpu()
-        
+    logits = logits[:, :, :len(self.tokenizer)] 
+    
     
     
     if "sfkl" in args.type:
@@ -104,7 +108,7 @@ class SFTDistilTrainer(SFTTrainer):
         distil_loss = reverse_kl(logits, teacher_logits, inputs)
     else:
         raise NotImplementedError
-    torch.cuda.empty_cache()
+    
     
     return distil_loss
     
@@ -120,7 +124,7 @@ class SFTDistilTrainer(SFTTrainer):
         if not self.optimizer:
             self.create_optimizer_and_scheduler(max_steps)
                 
-        for step in range(max_steps):
+        for step in range(max_steps*self.args.gradient_accumulation):
             try:
                 batch = next(data_loader)
             except:
@@ -129,14 +133,18 @@ class SFTDistilTrainer(SFTTrainer):
                 batch = next(data_loader)
                 
                 
-            # Modelo 1
-            self.optimizer.zero_grad()
-            loss = self.compute_loss(self.model, batch)
+            
+            
+            loss, distil_loss, lm_loss = self.compute_loss(self.model, batch)
             loss.backward()
             if (step+1) % self.args.gradient_accumulation_steps == 0:
-                #print('[ INFO ] STEP')
+                print('[ INFO ] STEP')
+                wandb.log({'train/loss_lm': lm_loss, 'train/loss': loss, 'train/loss_distil': distil_loss})                
                 self.optimizer.step()
                 self.lr_scheduler.step()
+                self.optimizer.zero_grad()
+                print(f'Step {step+1}, Loss : {loss}')
+                #flush()
                 
                         
             if (step+1) % int(self.args.save_steps) == 0:
@@ -144,7 +152,6 @@ class SFTDistilTrainer(SFTTrainer):
                 self.model.save_pretrained(self.args.output_dir + f'/checkpoint-{step+1}')
             
 
-            print(f'Step {step+1}, Loss : {loss.item()}')
             
         self.model.save_pretrained(self.args.output_dir)
     
