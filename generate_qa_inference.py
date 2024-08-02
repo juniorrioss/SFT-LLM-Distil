@@ -9,7 +9,7 @@ dotenv.load_dotenv()
 
 model_path = 'models/qwen0.5b-QA_r8/checkpoint-256'
 model_name = 'Qwen/Qwen2-0.5B-Instruct'
-model_path = 'juniorrios/qwen0.5-corejur-qa-fkl-ratio0.5'
+model_path = 'juniorrios/qwen-0.5b-distil-fkl-ratio1'
 max_seq_length = 8*1024
 
 
@@ -72,7 +72,7 @@ dataset = Dataset.from_pandas(df)
 dataset = dataset.map(run_gen, batched=False)
 
 #save_path = f"outputs/output_datasetv{args.version}_{test_file}_{model_choosed}.json"
-save_path = f"outputs/qwen0.5b-QA_r8_distiltest.json"
+save_path = f"outputs/qwen0.5b-QA_fkl-ratio1.json"
 dataset.to_pandas().to_json(save_path)
 #dataset.save_to_disk('.')
 #df.to_json(save_path)

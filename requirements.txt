@@ -4,3 +4,5 @@ transformers
 trl
 python-dotenv
 wandb
+peft
+bitsandbytes

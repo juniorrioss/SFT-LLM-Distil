@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 from datasets import load_dataset, Dataset
-from trl import DataCollatorForCompletionOnlyLM, SFTConfig
+from trl import DataCollatorForCompletionOnlyLM#, SFTConfig
 import torch
 from custom_trainer import SFTDistilTrainer
 import os
@@ -13,14 +13,13 @@ from peft import LoraConfig, PeftModelForCausalLM
 
 
 
-
 print('[ INFO ] TORCH CUDA COUNT: ', torch.cuda.device_count())
 
 load_dotenv()
 
 
 model_name = "Qwen/Qwen2-0.5B-Instruct"
-teacher_name = "Qwen/Qwen2-0.5B-Instruct"
+teacher_name = "Qwen/Qwen2-7B-Instruct"
 
 
 max_seq_length = 8*1024 
@@ -30,14 +29,13 @@ load_in_4bit = True
 
 # Load models
 
-# model = AutoModelForCausalLM.from_pretrained(model_name,
-#                                              attn_implementation="flash_attention_2",
-#                                              torch_dtype=torch.float16,
-#                                              device_map='auto'
-# )
+model = AutoModelForCausalLM.from_pretrained(model_name,
+                                              attn_implementation="flash_attention_2",
+                                              torch_dtype=torch.float16,
+                                              device_map='auto', load_in_4bit=load_in_4bit )
 
 
-# teacher_model = AutoModelForCausalLM.from_pretrained(teacher_name,
+#teacher_model = AutoModelForCausalLM.from_pretrained(teacher_name,
 #                                              attn_implementation="flash_attention_2",
 #                                              torch_dtype=torch.float16,
 #                                              device_map='auto',
@@ -47,10 +45,10 @@ load_in_4bit = True
 load_in_4bit = True
 
 # Load directly with Unsloth to download 4bit models 
-teacher_model, _ = FastLanguageModel.from_pretrained(
-    teacher_name, 
+teacher_model, tokenizer = FastLanguageModel.from_pretrained(
+   teacher_name, 
     max_seq_length = max_seq_length,
-    dtype = torch.bfloat16,
+    dtype = torch.float16,
     load_in_4bit = load_in_4bit,    
 )
 
@@ -65,12 +63,12 @@ teacher_model = FastLlamaModel.patch_peft_model(teacher_model)
 
 
 
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = model_name,
-    max_seq_length = max_seq_length,
-    dtype = torch.bfloat16,
-    load_in_4bit = load_in_4bit,
-)
+#model, tokenizer = FastLanguageModel.from_pretrained(
+#    model_name = model_name,
+#    max_seq_length = max_seq_length,
+#    dtype = torch.bfloat16,
+#    load_in_4bit = load_in_4bit,
+#)
 
 lora_config = LoraConfig(
     r = 8, # ESTAVA EM 16 Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
@@ -84,8 +82,9 @@ lora_config = LoraConfig(
     #loftq_config = None, # And LoftQ 
 )
 
-model = PeftModelForCausalLM(model, lora_config)
-model = FastLlamaModel.patch_peft_model(model)
+#model = PeftModelForCausalLM(model, lora_config)
+#import pdb;pdb.set_trace()
+#model = FastLlamaModel.patch_peft_model(model)
 #model.print_trainable_parameters()
 
 
@@ -97,8 +96,8 @@ model = FastLlamaModel.patch_peft_model(model)
 
 
 
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
+#tokenizer = AutoTokenizer.from_pretrained(model_name)
+#tokenizer.model_max_length=max_seq_length
 
 
 # def formatting_prompts_func(example):
@@ -138,7 +137,7 @@ df['len'] = df['text'].apply(lambda x: len(tokenizer(x).input_ids))
 df = df[df['len'] <= max_seq_length]
 df = df.drop_duplicates()
 dataset = Dataset.from_pandas(df)
-save_path = f"models/qwen0.5b-QA_r8_distil_srkl-ratio1"
+save_path = f"models/qwen0.5b-ratio1-fkl-epoch3"
 response_template = ' ###Respostas:'
 
 
@@ -147,26 +146,25 @@ response_template = ' ###Respostas:'
 @dataclass
 class DistilConfig:
     skew_alpha = 0.1
-    type = 'srkl'
+    type = 'fkl'
     kd_ratio = 1
 
 
 distil_args = DistilConfig()
 
-sft_config = SFTConfig(
+sft_config = TrainingArguments(
             output_dir=save_path,
             save_steps=50,
             per_device_train_batch_size=1,
             per_gpu_eval_batch_size=1, 
-            dataset_text_field='text', 
-            max_seq_length=max_seq_length, 
+            #max_seq_length=max_seq_length,
             gradient_accumulation_steps=8,
             optim = "paged_adamw_8bit",
             lr_scheduler_type = "linear",
             warmup_ratio= 0.07,
-            num_train_epochs = 2,
-            learning_rate = 2e-3,
-            bf16 = True,
+            num_train_epochs = 3,
+            learning_rate = 2e-4,
+            fp16 = True,
             logging_steps = 1,
             weight_decay = 0.01,
             seed = 3407,
@@ -186,7 +184,10 @@ trainer = SFTDistilTrainer(
     args=sft_config,
     #formatting_func=formatting_prompts_func,
     data_collator=collator,
-    dataset_text_field='text'
+    dataset_text_field='text',
+    max_seq_length=8*1024,
+    peft_config=lora_config,
+     
 )
 
 trainer.train()
